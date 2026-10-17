@@ -167,8 +167,20 @@ def chart_style(fig, title, x_title, y_title, height=410, right_margin=58):
         xaxis_title=f'<b>{x_title}</b>', yaxis_title=f'<b>{y_title}</b>',
         margin=dict(l=68, r=right_margin, t=67, b=60),
         hovermode='closest',
-        legend=dict(orientation='h', x=0, y=1.08, xanchor='left', yanchor='bottom',
-                    bgcolor='rgba(255,255,255,0.85)', font=dict(size=10)))
+#        legend=dict(orientation='h', x=0, y=1.08, xanchor='left', yanchor='bottom',
+#                    bgcolor='rgba(255,255,255,0.85)', font=dict(size=10)))
+       legend=dict(
+           orientation='v',
+           x=0.99,
+           y=0.99,
+           xanchor='right',
+           yanchor='top',
+           bgcolor='rgba(255,255,255,0.90)',
+           font=dict(size=11)
+       )
+
+
+       
     fig.update_xaxes(showgrid=True, gridcolor='#E0E6EC', linecolor='#AAB5C2',
                      linewidth=1, showline=True, zeroline=False,
                      ticks='outside', tickfont=dict(family=FONT_FAMILY, size=11))
