@@ -205,6 +205,10 @@ class Result:
     inc_per_well: np.ndarray
     diagnostic: pd.DataFrame
     lookup: GridLookup
+    # True per-well draws, with inactive well slots masked
+    ior_well_draws: np.ndarray | None = None
+    eor_well_draws: np.ndarray | None = None
+    well_active_mask: np.ndarray | None = None
 
 
 def summarize_curves(result: Result) -> pd.DataFrame:
@@ -281,6 +285,7 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
     init_link = x['cf_mdft'] / np.maximum(k * dy, 1e-7) * x['frac_height_frac']
     frac_cut0 = x['wc0']
     ior_per_well = np.zeros(n_runs)
+    ior_well_draws = np.full(shape, np.nan)
     for m in range(M):
         years_mid = (m + .5) / 12.
         wc_base = np.clip(wc + x['wc_growth_ppyr'] * years_mid, 0, .975)
@@ -302,6 +307,7 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
         q_base *= mask
         q_frac *= mask
         if m == 0:
+            ior_well_draws = np.where(mask, q_frac, np.nan)
             ior_per_well = np.sum(q_frac, axis=1) / np.maximum(count, 1)
         pre_rate[:, m] = np.sum(q_base, axis=1)
         frac_rate[:, m] = np.sum(q_frac, axis=1)
@@ -334,4 +340,6 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
                   frac_cum=frac_cum, incremental_cum=frac_cum - base_cum,
                   well_count=count, success_count=np.sum(success, axis=1),
                   ior_per_well=ior_per_well, eor_per_well=eor_per_well,
-                  inc_per_well=inc_per_well, diagnostic=diag, lookup=lookup)
+                  inc_per_well=inc_per_well, diagnostic=diag, lookup=lookup,
+                  ior_well_draws=ior_well_draws, eor_well_draws=np.where(mask, cf, np.nan),
+                  well_active_mask=mask)

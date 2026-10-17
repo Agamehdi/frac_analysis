@@ -1,4 +1,4 @@
-"""Frac Hyperion v2 – GitHub/Streamlit Cloud-ready demonstration application."""
+"""Frac Hyperion v2.1 – GitHub/Streamlit Cloud-ready demonstration application."""
 from __future__ import annotations
 
 import io
@@ -27,7 +27,7 @@ CUSTOM = """
 </style>
 """
 st.markdown(CUSTOM, unsafe_allow_html=True)
-st.markdown('<div class="hero"><h1>FRAC HYPERION <small style="font-size:0.42em">V2</small></h1>'
+st.markdown('<div class="hero"><h1>FRAC HYPERION <small style="font-size:0.42em">V2.1</small></h1>'
             '<p>Probabilistic fracture productivity • Monte Carlo forecast • 2D grid flow model</p></div>',
             unsafe_allow_html=True)
 
@@ -76,8 +76,8 @@ def get_prefs() -> UnitPrefs:
                                       help='mbd here means thousand barrels of oil per day.')
         cum_scale = st.sidebar.radio('Cumulative unit', ['stb', 'mmstb'], horizontal=True)
     else:
-        rate_scale = st.sidebar.radio('Rate unit', ['m³/d', 'km³/d'], horizontal=True,
-                                      help='km³/d here means thousand cubic metres per day.')
+        rate_scale = st.sidebar.radio('Rate unit', ['m³/d', '10³ m³/d'], horizontal=True,
+                                      help='10³ m³/d means thousand cubic metres per day.')
         cum_scale = st.sidebar.radio('Cumulative unit', ['m³', 'Mm³'], horizontal=True)
     return UnitPrefs(system, rate_scale, cum_scale)
 
@@ -92,7 +92,7 @@ def rate_factor_and_label(unit: str):
         return 1e-3, 'Mstb/d'
     if unit == 'm³/d':
         return 0.1589872949, 'm³/d'
-    if unit == 'km³/d':
+    if unit == '10³ m³/d':
         return 0.1589872949e-3, '10³ m³/d'
     return 1.0, unit
 
@@ -150,86 +150,160 @@ def mode(key):
     return float(st.session_state['params'].set_index('Key').loc[key, 'Most likely'])
 
 
-def percentile_cloud(values, months, title, y_title, baseline=None, y_factor=1.0, annotation_mode='peak'):
-    t = months / 12.0
-    val = values * y_factor
-    p90 = np.percentile(val, 10, axis=0)
-    p50 = np.percentile(val, 50, axis=0)
-    p10 = np.percentile(val, 90, axis=0)
-    fig = go.Figure()
-    draw_idx = np.linspace(0, len(val)-1, min(120, len(val)), dtype=int)
-    for i in draw_idx:
-        fig.add_trace(go.Scatter(x=t, y=val[i], mode='lines', hoverinfo='skip', showlegend=False,
-                                 line=dict(color='rgba(0,255,140,0.12)', width=1.0)))
-    fig.add_trace(go.Scatter(x=t, y=p90, name='P90', mode='lines', line=dict(color='red', width=3)))
-    fig.add_trace(go.Scatter(x=t, y=p50, name='P50', mode='lines', line=dict(color='black', width=3.2)))
-    fig.add_trace(go.Scatter(x=t, y=p10, name='P10', mode='lines', line=dict(color='purple', width=3)))
-    if baseline is not None:
-        base = np.percentile(baseline * y_factor, 50, axis=0)
-        fig.add_trace(go.Scatter(x=t, y=base, name='Base P50', mode='lines',
-                                 line=dict(color='gray', width=2, dash='dash')))
-    # annotate values
-    if annotation_mode == 'peak':
-        idx_p90 = int(np.argmax(p90)); idx_p50 = int(np.argmax(p50)); idx_p10 = int(np.argmax(p10))
-    else:
-        idx_p90 = idx_p50 = idx_p10 = len(t)-1
-    annos = [
-        (p90[idx_p90], t[idx_p90], 'red'),
-        (p50[idx_p50], t[idx_p50], 'black'),
-        (p10[idx_p10], t[idx_p10], 'purple'),
-    ]
-    for yv, xv, color in annos:
-        fig.add_annotation(x=xv, y=yv, text=f'{yv:,.2f}', showarrow=False,
-                           bgcolor='white', bordercolor=color, borderwidth=2,
-                           font=dict(color=color, size=13), xshift=28, yshift=12)
-    fig.update_layout(title=title, template='plotly_white', height=460,
-                      paper_bgcolor='#e9e9e9', plot_bgcolor='#e9e9e9',
-                      xaxis_title='Time (years)', yaxis_title=y_title,
-                      legend=dict(x=0.98, y=0.98, xanchor='right', bgcolor='rgba(255,255,255,0.8)'),
-                      margin=dict(l=20, r=20, t=55, b=20))
-    fig.update_xaxes(showgrid=True, gridcolor='#a7a7a7', zeroline=False)
-    fig.update_yaxes(showgrid=True, gridcolor='#a7a7a7', zeroline=False)
+# Consistent high-contrast presentation: white background and bold lettering.
+P90_COLOR = '#F32626'
+P50_COLOR = '#101820'
+P10_COLOR = '#8A05A8'
+CLOUD_COLOR = 'rgba(0, 220, 115, 0.15)'
+FONT_FAMILY = 'Arial Black, Arial, sans-serif'
+
+
+def chart_style(fig, title, x_title, y_title, height=410, right_margin=58):
+    fig.update_layout(
+        template='plotly_white', title=dict(text=f'<b>{title}</b>', x=0.02,
+                                            font=dict(family=FONT_FAMILY, size=16, color='#101820')),
+        height=height, paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
+        font=dict(family=FONT_FAMILY, size=11, color='#101820'),
+        xaxis_title=f'<b>{x_title}</b>', yaxis_title=f'<b>{y_title}</b>',
+        margin=dict(l=68, r=right_margin, t=67, b=60),
+        hovermode='closest',
+        legend=dict(orientation='h', x=0, y=1.08, xanchor='left', yanchor='bottom',
+                    bgcolor='rgba(255,255,255,0.85)', font=dict(size=10)))
+    fig.update_xaxes(showgrid=True, gridcolor='#E0E6EC', linecolor='#AAB5C2',
+                     linewidth=1, showline=True, zeroline=False,
+                     ticks='outside', tickfont=dict(family=FONT_FAMILY, size=11))
+    fig.update_yaxes(showgrid=True, gridcolor='#E0E6EC', linecolor='#AAB5C2',
+                     linewidth=1, showline=True, zeroline=False,
+                     ticks='outside', tickfont=dict(family=FONT_FAMILY, size=11))
     return fig
 
 
-def distribution_scatter(values, title, y_title, count=None, color='royalblue'):
-    v = np.asarray(values)
-    x = np.arange(1, len(v)+1)
-    p90, p50, p10 = np.percentile(v, [10, 50, 90])
+def percentile_cloud(values, months, title, y_title, baseline=None, y_factor=1.0,
+                     annotation_mode='peak'):
+    t = np.asarray(months) / 12.0
+    val = np.asarray(values, dtype=float) * y_factor
+    p90, p50, p10 = np.percentile(val, (10, 50, 90), axis=0)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=v, mode='markers', name='MC runs',
-                             marker=dict(color='rgba(30,200,120,0.35)', size=7),
-                             text=[f'Well count: {c}' if count is not None else '' for c in (count if count is not None else x)],
-                             hovertemplate='Run %{x}<br>Value %{y:,.2f}<br>%{text}<extra></extra>'))
-    for label, yv, col in [('P90', p90, 'red'), ('P50', p50, 'black'), ('P10', p10, 'purple')]:
-        fig.add_hline(y=yv, line_color=col, line_width=3)
-        fig.add_annotation(x=max(x), y=yv, text=f'{label}: {yv:,.2f}', showarrow=False,
-                           xshift=35, bgcolor='white', bordercolor=col, borderwidth=2,
-                           font=dict(color=col, size=12))
-    fig.update_layout(title=title, template='plotly_white', height=420,
-                      paper_bgcolor='#e9e9e9', plot_bgcolor='#e9e9e9',
-                      xaxis_title='Monte Carlo realization', yaxis_title=y_title,
-                      margin=dict(l=20, r=20, t=55, b=20))
-    fig.update_xaxes(showgrid=True, gridcolor='#b2b2b2')
-    fig.update_yaxes(showgrid=True, gridcolor='#b2b2b2')
+    draw_idx = np.linspace(0, len(val)-1, min(150, len(val)), dtype=int)
+    for i in draw_idx:
+        fig.add_trace(go.Scatter(
+            x=t, y=val[i], mode='lines', hoverinfo='skip', showlegend=False,
+            line=dict(color=CLOUD_COLOR, width=1)))
+    for lab, arr, color, width in (
+        ('P90', p90, P90_COLOR, 3.2), ('P50', p50, P50_COLOR, 3.7),
+        ('P10', p10, P10_COLOR, 3.2)):
+        fig.add_trace(go.Scatter(
+            x=t, y=arr, mode='lines', name=lab,
+            line=dict(color=color, width=width),
+            hovertemplate=f'{lab}: %{{y:,.3f}}<extra></extra>'))
+    if baseline is not None:
+        base = np.median(np.asarray(baseline)*y_factor, axis=0)
+        fig.add_trace(go.Scatter(x=t, y=base, mode='lines', name='Base P50',
+                                 line=dict(color='#65758B', width=2.2, dash='dash'),
+                                 hovertemplate='Base P50: %{y:,.3f}<extra></extra>'))
+    for arr, color in ((p90, P90_COLOR),(p50,P50_COLOR),(p10,P10_COLOR)):
+        k = int(np.argmax(arr)) if annotation_mode == 'peak' else len(t)-1
+        # Rightmost cumulative annotations are kept within the plot; don't crop labels.
+        xshift = -31 if k == len(t)-1 else 28
+        fig.add_annotation(x=t[k], y=float(arr[k]), text=f'<b>{arr[k]:,.2f}</b>',
+                           showarrow=False, xshift=xshift, yshift=14,
+                           bgcolor='#FFFFFF', bordercolor=color, borderwidth=1.5,
+                           borderpad=3, font=dict(color=color, size=11, family=FONT_FAMILY))
+    chart_style(fig, title, 'Time (years)', y_title, height=440)
+    fig.update_xaxes(range=[0, float(t[-1]) * 1.02])
+    return fig
+
+
+def distribution_scatter(values, title, y_title, count, well_index=None, run_index=None):
+    """One dot per real well draw (V2.1), or one per MC run for old engines."""
+    v = np.asarray(values, dtype=float)
+    counts = np.asarray(count, dtype=int)
+    full_n = len(v)
+    if well_index is None:
+        index = counts.astype(float)
+        run = np.arange(1, full_n+1)
+        x_title = 'Number of wells (sampled project size)'
+    else:
+        index = np.asarray(well_index, dtype=float)
+        run = np.asarray(run_index, dtype=int)
+        x_title = 'Well index within Monte Carlo realization'
+    # Keep clouds responsive on Streamlit Cloud: markers are sampled for
+    # display, but percentiles always use ALL physical well draws.
+    selected = np.linspace(0, full_n-1, min(full_n, 9000), dtype=int)
+    jitter = 0.18 * np.sin(selected * 2.399963229728653)
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(
+        x=index[selected]+jitter, y=v[selected], mode='markers', name='Monte Carlo draws',
+        marker=dict(color='rgba(0,197,109,0.42)', size=5.5),
+        customdata=np.column_stack((run[selected], counts[selected])),
+        hovertemplate='MC run %{customdata[0]}<br>Wells in project %{customdata[1]}'
+                      '<br>Value %{y:,.3f}<extra></extra>'))
+    percentile_values = np.percentile(v, [10, 50, 90])
+    for (name, col), yv in zip((('P90',P90_COLOR),('P50',P50_COLOR),('P10',P10_COLOR)),percentile_values):
+        fig.add_hline(y=float(yv), line_color=col, line_width=2.7,
+                      annotation_text=f'<b>{name}: {yv:,.2f}</b>',
+                      annotation_position='top right',
+                      annotation_font_color=col, annotation_font_size=10)
+    chart_style(fig, title, x_title, y_title, height=440, right_margin=65)
+    fig.update_xaxes(range=[max(0, float(np.min(index))-0.8), float(np.max(index))+0.8])
     return fig
 
 
 def well_count_chart(counts):
-    p90, p50, p10 = np.percentile(counts, [10, 50, 90])
-    hist = px.histogram(x=counts, nbins=max(10, min(30, len(np.unique(counts))+4)))
-    hist.update_traces(marker_color='rgba(0,180,120,0.65)', marker_line_color='white', marker_line_width=1)
-    for label, xval, col in [('P90', p90, 'red'), ('P50', p50, 'black'), ('P10', p10, 'purple')]:
-        hist.add_vline(x=xval, line_width=3, line_color=col)
-        hist.add_annotation(x=xval, y=1, yref='paper', text=f'{label}: {xval:.1f}', showarrow=False,
-                            bgcolor='white', bordercolor=col, borderwidth=2, yshift=-20)
-    hist.update_layout(title='Well Count Distribution', template='plotly_white', height=360,
-                       paper_bgcolor='#e9e9e9', plot_bgcolor='#e9e9e9',
-                       xaxis_title='Number of wells selected', yaxis_title='Frequency',
-                       margin=dict(l=20, r=20, t=55, b=20))
-    hist.update_xaxes(showgrid=True, gridcolor='#b2b2b2')
-    hist.update_yaxes(showgrid=True, gridcolor='#b2b2b2')
-    return hist
+    counts = np.asarray(counts, dtype=int)
+    uniques, frequencies = np.unique(counts, return_counts=True)
+    fig = go.Figure(go.Bar(x=uniques, y=frequencies, name='Realizations',
+                           marker=dict(color='#28C89A', line=dict(color='#11765E', width=0.5))))
+    for label, xval, col in zip(('P90', 'P50', 'P10'), np.percentile(counts,[10,50,90]),
+                                 (P90_COLOR,P50_COLOR,P10_COLOR)):
+        fig.add_vline(x=float(xval), line_width=2.8, line_color=col,
+                      annotation_text=f'<b>{label}: {xval:.0f}</b>',
+                      annotation_position='top', annotation_font_color=col)
+    chart_style(fig, 'Well Count Distribution', 'Number of Wells',
+                'Monte Carlo Frequency', height=440)
+    if len(uniques)<30:
+        fig.update_xaxes(dtick=max(1, int((uniques.max()-uniques.min())//12)))
+    return fig
+
+
+def per_well_metrics(res):
+    """Version-safe calculations: work with both V1 and V2 Result objects.
+
+    IOR = average post-frac oil rate during first forecast month per selected well
+    (including frac/cleanup downtime); EOR = cumulative post-frac oil produced
+    during chosen forecast horizon per selected well, NOT reserve booking or EUR.
+    """
+    counts = np.asarray(res.well_count, dtype=float)
+    if np.any(counts <= 0):
+        raise ValueError('Well counts must be positive')
+    ior = np.asarray(res.frac_rate[:, 0], dtype=float) / counts
+    eor = np.asarray(res.frac_cum[:, -1], dtype=float) / counts
+    incremental = np.asarray(res.incremental_cum[:, -1], dtype=float) / counts
+    return ior, eor, incremental
+
+
+def individual_well_scatter_data(res):
+    """Returns individual well MC draws if engine supports them.
+
+    Old GitHub engines are supported with project-average-per-well draws.
+    """
+    mask = getattr(res, 'well_active_mask', None)
+    ior_matrix = getattr(res, 'ior_well_draws', None)
+    eor_matrix = getattr(res, 'eor_well_draws', None)
+    if mask is None or ior_matrix is None or eor_matrix is None:
+        ior, eor, _ = per_well_metrics(res)
+        counts = np.asarray(res.well_count, dtype=int)
+        return ior, eor, counts, None, None, False
+    mask = np.asarray(mask, dtype=bool)
+    ior_matrix = np.asarray(ior_matrix)
+    eor_matrix = np.asarray(eor_matrix)
+    if ior_matrix.shape != mask.shape or eor_matrix.shape != mask.shape:
+        raise ValueError('Per-well arrays and well-count mask are inconsistent')
+    n_runs, max_wells = mask.shape
+    run_ids = np.broadcast_to(np.arange(1,n_runs+1)[:,None], mask.shape)[mask]
+    well_ids = np.broadcast_to(np.arange(1,max_wells+1)[None,:],mask.shape)[mask]
+    counts = np.broadcast_to(np.asarray(res.well_count)[:,None],mask.shape)[mask]
+    return ior_matrix[mask], eor_matrix[mask], counts, well_ids, run_ids, True
 
 
 def display_table_editor(prefs: UnitPrefs):
@@ -280,21 +354,34 @@ def display_table_editor(prefs: UnitPrefs):
 
 def result_archive(res) -> bytes:
     curves = summarize_curves(res)
-    monthly = {'Run': np.repeat(np.arange(1, len(res.well_count) + 1), len(res.months)),
+    monthly = {'Run': np.repeat(np.arange(1, len(res.well_count)+1), len(res.months)),
                'Month': np.tile(res.months, len(res.well_count))}
     for name, ar in [('Baseline rate bopd', res.base_rate), ('Post frac rate bopd', res.frac_rate),
                      ('Incremental rate bopd', res.incremental_rate), ('Baseline cum stb', res.base_cum),
                      ('Post frac cum stb', res.frac_cum), ('Incremental cum stb', res.incremental_cum)]:
         monthly[name] = ar.ravel()
-    extra = pd.DataFrame({'Run': np.arange(1, len(res.well_count)+1), 'Well count': res.well_count,
-                          'Success count': res.success_count, 'IOR per well bopd': res.ior_per_well,
-                          'EOR per well stb': res.eor_per_well, 'Incremental per well stb': res.inc_per_well})
+    ior, eor, inc = per_well_metrics(res)
+    extra = pd.DataFrame({
+        'Run': np.arange(1, len(res.well_count)+1), 'Well count': res.well_count,
+        'Success count': res.success_count,
+        'IOR first-month avg per well bopd': ior,
+        'EOR forecast-horizon per well stb': eor,
+        'Incremental forecast per well stb': inc})
     bio = io.BytesIO()
     with zipfile.ZipFile(bio, 'w', zipfile.ZIP_DEFLATED) as zz:
         zz.writestr('monthly_percentiles.csv', curves.to_csv(index=False))
         zz.writestr('run_level_results.csv', res.diagnostic.to_csv(index=False))
         zz.writestr('all_realizations_monthly.csv', pd.DataFrame(monthly).to_csv(index=False))
         zz.writestr('per_well_summary.csv', extra.to_csv(index=False))
+        if getattr(res, 'well_active_mask', None) is not None:
+            mask = np.asarray(res.well_active_mask, dtype=bool)
+            n_run, n_well = mask.shape
+            idx = np.where(mask)
+            raw_wells = pd.DataFrame({
+                'Run': idx[0] + 1, 'Well index': idx[1] + 1,
+                'IOR first-month avg bopd': np.asarray(res.ior_well_draws)[mask],
+                'EOR forecast-horizon stb': np.asarray(res.eor_well_draws)[mask]})
+            zz.writestr('individual_well_draws.csv', raw_wells.to_csv(index=False))
         zz.writestr('input_ranges.csv', st.session_state['params'].to_csv(index=False))
     return bio.getvalue()
 
@@ -349,21 +436,53 @@ if page == 'Monte Carlo Studio':
         with m4:
             st.metric(f'P50 Initial Frac Rate ({rate_label})', f'{np.percentile(final_rate, 50):,.2f}')
 
-        st.plotly_chart(percentile_cloud(res.frac_rate, res.months, 'Total Oil Production Profile', f'Oil Rate ({rate_label})', baseline=res.base_rate, y_factor=rate_factor, annotation_mode='peak'), use_container_width=True)
-        st.plotly_chart(percentile_cloud(res.incremental_cum, res.months, 'Incremental Oil Production (P90, P50, P10)', f'Incremental Production ({cum_label})', baseline=None, y_factor=cum_factor, annotation_mode='end'), use_container_width=True)
-        c_left, c_right = st.columns(2)
-        with c_left:
-            st.plotly_chart(percentile_cloud(res.incremental_rate, res.months, 'Incremental Oil Rate Profile', f'Incremental Rate ({rate_label})', baseline=None, y_factor=rate_factor, annotation_mode='peak'), use_container_width=True)
-        with c_right:
+        st.subheader('Probabilistic Production Forecasts')
+        r1left, r1right = st.columns(2, gap='medium')
+        with r1left:
+            st.plotly_chart(percentile_cloud(
+                res.frac_rate, res.months, 'Total Oil Production Profile',
+                f'Oil Rate ({rate_label})', baseline=res.base_rate,
+                y_factor=rate_factor, annotation_mode='peak'),
+                use_container_width=True)
+        with r1right:
+            st.plotly_chart(percentile_cloud(
+                res.incremental_cum, res.months, 'Incremental Oil Production (P90 / P50 / P10)',
+                f'Incremental Oil ({cum_label})', y_factor=cum_factor,
+                annotation_mode='end'), use_container_width=True)
+        r2left, r2right = st.columns(2, gap='medium')
+        with r2left:
+            st.plotly_chart(percentile_cloud(
+                res.incremental_rate, res.months, 'Incremental Oil Rate Profile',
+                f'Incremental Rate ({rate_label})', y_factor=rate_factor,
+                annotation_mode='peak'), use_container_width=True)
+        with r2right:
             st.plotly_chart(well_count_chart(res.well_count), use_container_width=True)
-        s1, s2 = st.columns(2)
-        ior_vals = res.ior_per_well * rate_factor
-        eor_vals = res.eor_per_well * cum_factor
-        with s1:
-            st.plotly_chart(distribution_scatter(ior_vals, 'IOR per Well Scatter', f'Initial Oil Rate per Well ({rate_label})', count=res.well_count), use_container_width=True)
-        with s2:
-            st.plotly_chart(distribution_scatter(eor_vals, 'EOR per Well Scatter', f'Estimated Oil Recovery per Well ({cum_label})', count=res.well_count), use_container_width=True)
-        st.download_button('⬇ Download result package (.zip)', result_archive(res), 'frac_hyperion_v2_results.zip', 'application/zip', use_container_width=True)
+
+        st.subheader('Per-Well Results — Monte Carlo Scatter')
+        ior, eor, counts, well_ids, run_ids, individual = individual_well_scatter_data(res)
+        if individual:
+            st.caption('Each dot represents one active well in one Monte Carlo run. '
+                       'P90/P50/P10 are calculated across all simulated well outcomes. '
+                       'IOR is first-month average post-frac oil rate including downtime; '
+                       'EOR is the selected forecast-period post-frac cumulative oil, not ultimate reserves.')
+        else:
+            st.info('Older frac_physics.py detected: scatter plots display project-average '
+                    'per-well values per realization. Replace frac_physics.py from this ZIP '
+                    'to show every well individually.')
+        r3left, r3right = st.columns(2, gap='medium')
+        with r3left:
+            st.plotly_chart(distribution_scatter(
+                ior * rate_factor, 'Initial Oil Rate (IOR) per Well',
+                f'IOR per Well ({rate_label})', counts, well_ids, run_ids),
+                use_container_width=True)
+        with r3right:
+            st.plotly_chart(distribution_scatter(
+                eor * cum_factor, 'EOR per Well — Forecast Horizon',
+                f'EOR per Well ({cum_label})', counts, well_ids, run_ids),
+                use_container_width=True)
+        st.download_button('⬇ Download result package (.zip)', result_archive(res),
+                           'frac_hyperion_v2_1_results.zip', 'application/zip', use_container_width=True)
+
 
 elif page == '2D Fracture Grid':
     st.markdown('### 2D Fracture Grid & Productivity Gain')
