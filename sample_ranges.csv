@@ -1,0 +1,26 @@
+Group,Key,Parameter,Unit,Low,Most likely,High,Distribution,Guidance
+Rock,k_md,Matrix permeability,mD,1.0,6.0,20.0,Log-triangular,Isotropic matrix permeability
+Rock,h_ft,Net pay,ft,20.0,50.0,90.0,Triangular,Connected reservoir thickness
+Rock,phi,Porosity,fraction,0.1,0.17,0.24,Triangular,Pore-volume fraction
+Rock,ct_psi,Effective total compressibility,1/psi,8e-06,1.5e-05,3e-05,Log-triangular,Lumped pressure depletion storage
+Rock,area_ac,Independent drainage area per well,acres,80.0,200.0,360.0,Triangular,Independent tanks assumed; no interference
+Pressure,pr_psi,Initial average pressure,psia,2600.0,3200.0,3800.0,Triangular,Average pressure at frac date
+Pressure,pwf_psi,Producing bottomhole pressure,psia,1500.0,2100.0,2400.0,Triangular,Held constant for forecast
+Pressure,pressure_support,External pressure support fraction,0-1,0.0,0.25,0.6,Triangular,Fraction of produced withdrawal replaced in lumped tank
+PVT,mu_cp,Oil viscosity,cP,1.0,1.5,2.5,Triangular,Used in mechanistic q0 calculation
+PVT,bo,Oil FVF,rb/stb,1.08,1.22,1.4,Triangular,Used in storage depletion
+Well,rw_ft,Wellbore radius,ft,0.25,0.33,0.5,Triangular,Used in radial PI denominator
+Well,skin_pre,Pre-frac skin,dimensionless,0.0,4.0,8.0,Triangular,Pre-frac damage + skin
+Well,skin_post_residual,Post-frac residual skin,dimensionless,0.0,0.3,1.0,Triangular,Additional residual skin beyond grid geometric enhancement
+Well,q0_bopd,Measured current oil rate,bopd,60.0,110.0,170.0,Triangular,Initial baseline anchor (history-matched mode)
+Well,uptime,Operating uptime,0-1,0.75,0.9,0.98,Triangular,Operational uptime applied to forecast
+Water,wc0,Current water cut,fraction,0.05,0.15,0.35,Triangular,Starting produced water fraction
+Water,wc_growth_ppyr,Baseline WC growth,fraction/year,0.0,0.02,0.05,Triangular,Simple empirical rise in water cut
+Water,frac_extra_wc_pp,Frac-related additional WC,fraction,0.0,0.04,0.15,Triangular,Gradual post-frac extra water-cut penalty
+Water,frac_water_delay_m,Water penalty onset,months,3.0,9.0,18.0,Triangular,Months until extra water cut develops
+Frac,xf_ft,Fracture half-length,ft,80.0,200.0,400.0,Triangular,Single planar bi-wing fracture
+Frac,cf_mdft,Initial fracture conductivity,mD.ft,100.0,900.0,4500.0,Log-triangular,"kf*w, NOT fracture permeability alone"
+Frac,frac_height_frac,Fraction of pay contacted,0-1,0.5,0.85,1.0,Triangular,Fraction of thickness effectively connected to fracture
+Frac,retention_5y,Conductivity retained at 5 years,0-1,0.4,0.75,0.95,Triangular,Exponential conductivity decline factor
+Frac,frac_success_prob,Technical success probability,0-1,0.6,0.82,0.95,Triangular,Sampled per-well conditional success probability
+Frac,downtime_days,Frac job and cleanup downtime,days,5.0,12.0,25.0,Triangular,Lost production days at start of forecast
