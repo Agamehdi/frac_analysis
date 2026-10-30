@@ -1,4 +1,4 @@
-"""Frac Hyperion v2.1 – GitHub/Streamlit Cloud-ready demonstration application."""
+"""Frac Hyperion v2.2 – including optional KAPPA single-zone benchmarking."""
 from __future__ import annotations
 
 import io
@@ -11,6 +11,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from frac_physics import GridLookup, default_parameter_table, run_mc, solve_grid, summarize_curves, validate_parameters
+from kappa_benchmark import (DEFAULT_BENCHMARK, POST, INCREMENTAL, GLOBAL, LOCAL,
+                             check_benchmark, reference_rates, reference_signature,
+                             fit_benchmark, calibration_factor, performance)
 
 st.set_page_config(page_title='Frac Hyperion | Monte Carlo', page_icon='🛢️', layout='wide', initial_sidebar_state='expanded')
 
@@ -27,7 +30,7 @@ CUSTOM = """
 </style>
 """
 st.markdown(CUSTOM, unsafe_allow_html=True)
-st.markdown('<div class="hero"><h1>FRAC HYPERION <small style="font-size:0.42em">V2.1</small></h1>'
+st.markdown('<div class="hero"><h1>FRAC HYPERION <small style="font-size:0.42em">V2.2</small></h1>'
             '<p>Probabilistic fracture productivity • Monte Carlo forecast • 2D grid flow model</p></div>',
             unsafe_allow_html=True)
 
@@ -35,8 +38,14 @@ if 'params' not in st.session_state:
     st.session_state['params'] = default_parameter_table()
 if 'last_result' not in st.session_state:
     st.session_state['last_result'] = None
+if 'kappa_points' not in st.session_state:
+    st.session_state['kappa_points'] = DEFAULT_BENCHMARK.copy()
+if 'kappa_calibration' not in st.session_state:
+    st.session_state['kappa_calibration'] = None
+if 'kappa_definition_saved' not in st.session_state:
+    st.session_state['kappa_definition_saved'] = INCREMENTAL
 
-PAGES = ['Monte Carlo Studio', '2D Fracture Grid', '3D Fracture View', 'Guidelines & SPE References']
+PAGES = ['Monte Carlo Studio', 'KAPPA Benchmark & Match', '2D Fracture Grid', '3D Fracture View', 'Guidelines & SPE References']
 st.sidebar.title('Navigation')
 page = st.sidebar.radio('Select workspace', PAGES, label_visibility='collapsed')
 st.sidebar.divider()
@@ -167,11 +176,8 @@ def chart_style(fig, title, x_title, y_title, height=410, right_margin=58):
         xaxis_title=f'<b>{x_title}</b>', yaxis_title=f'<b>{y_title}</b>',
         margin=dict(l=68, r=right_margin, t=67, b=60),
         hovermode='closest',
-        legend=dict(orientation='h', x=0.99, y=0.99, xanchor='right', yanchor='top',
-                    bgcolor='rgba(255,255,255,0.90)', font=dict(size=11)))
-
-
-       
+        legend=dict(orientation='h', x=0, y=1.08, xanchor='left', yanchor='bottom',
+                    bgcolor='rgba(255,255,255,0.85)', font=dict(size=10)))
     fig.update_xaxes(showgrid=True, gridcolor='#E0E6EC', linecolor='#AAB5C2',
                      linewidth=1, showline=True, zeroline=False,
                      ticks='outside', tickfont=dict(family=FONT_FAMILY, size=11))
@@ -386,6 +392,11 @@ def result_archive(res) -> bytes:
                 'EOR forecast-horizon stb': np.asarray(res.eor_well_draws)[mask]})
             zz.writestr('individual_well_draws.csv', raw_wells.to_csv(index=False))
         zz.writestr('input_ranges.csv', st.session_state['params'].to_csv(index=False))
+        zz.writestr('calibration_used.txt',
+                    ('Method: '+str(res.calibration_method)+'\nDefinition: '+str(res.calibration_definition))
+                    if res.calibration_method else 'Calibration: OFF')
+        if res.calibration_method and st.session_state.get('kappa_calibration'):
+            zz.writestr('kappa_benchmark_points.csv', st.session_state['kappa_points'].to_csv(index=False))
     return bio.getvalue()
 
 
@@ -404,26 +415,50 @@ if page == 'Monte Carlo Studio':
         years = int(st.number_input('Forecast years', min_value=1, max_value=10, value=8, step=1))
     c1, c2, c3 = st.columns([2,2,1])
     with c1:
-        initial_rate = st.radio('Pre-frac baseline initialization', ['Measured rate anchor', 'Mechanistic radial Darcy PI'], horizontal=True)
+        initial_rate = st.radio('Pre-frac baseline initialization',
+                                ['Measured rate anchor', 'Mechanistic radial Darcy PI'],
+                                horizontal=True, key='mc_rate_mode_widget')
     with c2:
-        grid_size = st.select_slider('Grid lookup resolution', options=[15,19,21,25,29], value=21)
+        grid_size = st.select_slider('Grid lookup resolution', options=[15,19,21,25,29], value=21,
+                                     key='mc_grid_size_widget')
     with c3:
         seed = int(st.number_input('Random seed', min_value=0, max_value=10**8, value=42))
     st.info('Well count is treated as an uncertain input. For each realization the model samples a well count from the Low / Most Likely / High range, then samples reservoir and fracture properties independently for those wells.')
     errors = display_table_editor(PREFS)
     if not (nlo <= nmid <= nhi):
         st.error('Well count inputs must satisfy Low ≤ Most likely ≤ High.')
-    run_now = st.button('▶ Run Monte Carlo', type='primary', use_container_width=True, disabled=bool(errors) or not (nlo <= nmid <= nhi))
+    active = st.session_state.get('kappa_calibration')
+    sig = reference_signature(st.session_state['params'], initial_rate, grid_size)
+    match_available = bool(active and active['signature'] == sig)
+    if active and not match_available:
+        st.warning('KAPPA match was prepared with different model inputs or baseline mode. '
+                   'Rebuild the match on the KAPPA page before using it here.')
+    if active and match_available:
+        st.caption(f"KAPPA match available: {active['method']} | {active['definition']} | "
+                   f"k = {active['perms_md'][0]:g}–{active['perms_md'][-1]:g} mD; "
+                   'outside this range the correction is not applied.')
+    use_match = st.checkbox('Apply KAPPA-matched calibration to Monte Carlo forecast',
+                            value=False, disabled=not match_available,
+                            help='Applies a permeability-specific rate correction only to technically successful fractures. '
+                                 'The base-case forecast stays unchanged. The match is empirical, not new frac physics.')
+    if use_match and initial_rate == 'Measured rate anchor':
+        st.warning('Measured rate anchor fixes baseline q0 across permeabilities. '
+                   'For KAPPA variable-permeability comparison, mechanistic Darcy PI is usually more meaningful.')
+    run_now = st.button('▶ Run Monte Carlo', type='primary', use_container_width=True,
+                        disabled=bool(errors) or not (nlo <= nmid <= nhi))
     if run_now:
         with st.spinner('Running Monte Carlo forecast...'):
             try:
                 res = run_mc(st.session_state['params'], nlo, nmid, nhi, n_runs=simulations, years=years,
-                             seed=seed, q0_mode=initial_rate, grid_size=grid_size)
+                             seed=seed, q0_mode=initial_rate, grid_size=grid_size,
+                             calibration=active if use_match and match_available else None)
                 st.session_state['last_result'] = res
             except Exception as exc:
                 st.error(f'Run failed: {exc}')
     res = st.session_state['last_result']
     if res is not None:
+        st.caption('Forecast calibration: **' + (str(res.calibration_method) + ' / ' +
+                   str(res.calibration_definition) if res.calibration_method else 'OFF (original physics)') + '**')
         rate_factor, rate_label = rate_factor_and_label(PREFS.rate_scale)
         cum_factor, cum_label = cum_factor_and_label(PREFS.cum_scale)
         st.divider()
@@ -484,7 +519,170 @@ if page == 'Monte Carlo Studio':
                 f'EOR per Well ({cum_label})', counts, well_ids, run_ids),
                 use_container_width=True)
         st.download_button('⬇ Download result package (.zip)', result_archive(res),
-                           'frac_hyperion_v2_1_results.zip', 'application/zip', use_container_width=True)
+                           'frac_hyperion_v2_2_results.zip', 'application/zip', use_container_width=True)
+
+
+elif page == 'KAPPA Benchmark & Match':
+    st.markdown('### KAPPA | Single-Zone Benchmark & Rate Matching')
+    st.info('Compare stabilized **single-zone** initial deliverability at identical modal rock, fluid, '
+            'pressure and fracture inputs. No downtime, uptime, depletion or Monte Carlo well count is '
+            'included in this comparison. KAPPA points are **simulation benchmarks**, not field production history.')
+    edit_left, edit_right = st.columns([3, 2], gap='large')
+    with edit_left:
+        st.markdown('**KAPPA benchmark data — editable**')
+        edited = st.data_editor(st.session_state['kappa_points'], hide_index=True,
+                                num_rows='dynamic', use_container_width=True, key='kappa_edit_table',
+                                column_config={
+                                    'Perm (mD)': st.column_config.NumberColumn('Permeability (mD)', min_value=0.000001,
+                                                                               format='%.3f', required=True),
+                                    'KAPPA Oil Rate (stb/d)': st.column_config.NumberColumn('KAPPA Oil Rate (stb/d)',
+                                                                                             min_value=0.000001, format='%.2f', required=True),
+                                })
+        st.session_state['kappa_points'] = edited.copy()
+        try:
+            bench = check_benchmark(edited)
+            st.download_button('⬇ Download KAPPA benchmark CSV', bench.to_csv(index=False).encode(),
+                               'kappa_benchmark.csv', 'text/csv', use_container_width=True)
+            valid = True
+        except Exception as exc:
+            st.error('Benchmark validation: ' + str(exc))
+            valid = False
+            bench = None
+        uploaded = st.file_uploader('Import benchmark CSV (same two columns)', type=['csv'],
+                                    key='kappa_csv_upload')
+        if uploaded is not None and st.button('Apply uploaded KAPPA benchmark'):
+            try:
+                new_points = check_benchmark(pd.read_csv(uploaded))
+                st.session_state['kappa_points'] = new_points
+                st.session_state['kappa_calibration'] = None
+                if 'kappa_edit_table' in st.session_state:
+                    del st.session_state['kappa_edit_table']
+                st.session_state['last_result'] = None
+                st.rerun()
+            except Exception as exc:
+                st.error(f'Could not apply CSV: {exc}')
+    with edit_right:
+        st.markdown('**Comparison basis**')
+        definition = st.radio('What do the KAPPA oil rates represent?',
+                              [INCREMENTAL, POST],
+                              index=0 if st.session_state['kappa_definition_saved'] == INCREMENTAL else 1,
+                              help='Post-frac = full after-frac oil rate. Incremental = after-frac minus pre-frac.')
+        st.session_state['kappa_definition_saved'] = definition
+        baseline_mode = st.radio('Baseline PI model for permeability sweep',
+                                  ['Mechanistic radial Darcy PI', 'Measured rate anchor'],
+                                  help='Mechanistic mode changes baseline PI with permeability. Measured anchor uses '
+                                       'the same fixed pre-frac oil rate at every permeability.')
+        grid_res = st.select_slider('Benchmark grid resolution', options=[15,19,21,25,29], value=21)
+        method = st.selectbox('Automatic match method', [LOCAL, GLOBAL],
+                              help='PCHIP reproduces input targets in the 1-zone anchor scenario. Global multiplier '
+                                   'can only reduce aggregate error, not necessarily fit all four points.')
+        threshold = st.slider('Acceptable raw error (MAPE, %)', 1, 50, 15)
+        st.caption('Inputs are taken from the **Most likely** column on Monte Carlo Studio. '
+                   'The same fracture geometry, fluid properties and pressure differential are used at all k values.')
+    if not valid:
+        st.stop()
+    if baseline_mode == 'Measured rate anchor':
+        st.warning('A fixed measured q0 for all permeability points is rarely a valid k-sensitivity assumption. '
+                   'The mechanistic PI mode is preferred when benchmarking permeability response.')
+    if definition == INCREMENTAL:
+        st.caption('Using your stated interpretation: KAPPA target = incremental rate Δq = post-frac minus pre-frac.')
+    try:
+        raw = reference_rates(st.session_state['params'], bench['Perm (mD)'].to_numpy(),
+                              baseline_mode, grid_res)
+        if definition == POST and (raw['Base rate (stb/d)'].to_numpy() >=
+                                   bench['KAPPA Oil Rate (stb/d)'].to_numpy()).any():
+            st.warning('At one or more points, benchmark post-frac oil is no higher than the model baseline. '
+                       'That would imply zero/negative incremental oil. Check which rate definition is intended, '
+                       'or revisit the assumed baseline/Pwf before applying a post-frac-rate calibration.')
+        signature = reference_signature(st.session_state['params'], baseline_mode, grid_res)
+        calibration, matched = fit_benchmark(bench, raw, definition, method, signature)
+        raw_stats = performance(matched, 'Hyperion Raw (stb/d)')
+        fit_stats = performance(matched, 'Matched (stb/d)')
+        st.divider()
+        x1,x2,x3,x4 = st.columns(4)
+        x1.metric('Raw MAPE', f"{raw_stats['MAPE (%)']:.1f}%")
+        x2.metric('Matched MAPE', f"{fit_stats['MAPE (%)']:.1f}%")
+        x3.metric('Raw RMSE', f"{raw_stats['RMSE (stb/d)']:.1f} stb/d")
+        x4.metric('Max raw error', f"{raw_stats['Max APE (%)']:.1f}%")
+        if raw_stats['MAPE (%)'] <= threshold:
+            st.success(f'Raw screening result is within the selected {threshold}% average-error tolerance '
+                       'for these KAPPA points.')
+        else:
+            st.warning(f'Raw screening result exceeds {threshold}% MAPE tolerance. '
+                       'Check zone net pay, ΔP, PVT, skin and frac geometry before relying on empirical matching.')
+        st.markdown('**KAPPA vs Hyperion (before / after matching)**')
+        st.dataframe(matched.style.format({
+            'Perm (mD)':'{:,.2f}', 'KAPPA Oil Rate (stb/d)':'{:,.1f}',
+            'Hyperion Raw (stb/d)':'{:,.1f}', 'Matched (stb/d)':'{:,.1f}',
+            'Raw Error (%)':'{:+.1f}%', 'Matched Error (%)':'{:+.1f}%',
+            'Applied Factor':'{:.3f}×'}), use_container_width=True, hide_index=True)
+        k_grid = np.geomspace(float(bench['Perm (mD)'].min()), float(bench['Perm (mD)'].max()), 100)
+        ref_grid = reference_rates(st.session_state['params'], k_grid, baseline_mode, grid_res)
+        y_col = 'Post-frac rate (stb/d)' if definition == POST else 'Incremental rate (stb/d)'
+        y_raw = ref_grid[y_col].to_numpy(float)
+        y_matched = y_raw * calibration_factor(k_grid, calibration)
+        left, right = st.columns([3,2], gap='medium')
+        with left:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=k_grid, y=y_raw, name='Hyperion raw', mode='lines',
+                                     line=dict(color='#64748B', width=3, dash='dash')))
+            fig.add_trace(go.Scatter(x=k_grid, y=y_matched, name='Hyperion matched', mode='lines',
+                                     line=dict(color='#00875A', width=3.5)))
+            fig.add_trace(go.Scatter(x=bench['Perm (mD)'], y=bench['KAPPA Oil Rate (stb/d)'],
+                                     name='KAPPA reference', mode='markers',
+                                     marker=dict(color='#EA580C', size=12, symbol='diamond',
+                                                 line=dict(color='#FFFFFF', width=1.5))))
+            chart_style(fig, 'Single-Zone Oil Rate vs Permeability', 'Permeability (mD)',
+                        'Oil rate (stb/d)', 430)
+            fig.update_xaxes(type='log')
+            st.plotly_chart(fig, use_container_width=True)
+        with right:
+            factors = calibration_factor(k_grid, calibration)
+            fig2 = go.Figure(go.Scatter(x=k_grid, y=factors, mode='lines',
+                                         line=dict(color='#2563EB', width=3), name='Applied match'))
+            fig2.add_hline(y=1, line_color='#94A3B8', line_dash='dash')
+            chart_style(fig2, 'Calibration Factor vs Permeability', 'Permeability (mD)',
+                        'Rate correction factor (×)', 430)
+            fig2.update_xaxes(type='log')
+            st.plotly_chart(fig2, use_container_width=True)
+        st.caption('The matched curve is an **empirical, in-sample** correction to the same rate quantity. '
+                   'PCHIP exactly passes through the supplied KAPPA anchors by construction; this is not '
+                   'independent validation and does not automatically resolve the high-permeability plateau. '
+                   'Rates are not corrected outside the entered permeability range.')
+        old = st.session_state.get('kappa_calibration')
+        definition_matches = bool(old and old['definition'] == definition and
+                                  old['signature'] == signature and
+                                  old['method'] == method and
+                                  np.array_equal(old['perms_md'], calibration['perms_md']) and
+                                  np.allclose(old['factors'], calibration['factors'], rtol=1e-9))
+        c_apply, c_remove = st.columns(2)
+        with c_apply:
+            if st.button('✓ Save match for Monte Carlo', type='primary', use_container_width=True):
+                st.session_state['kappa_calibration'] = calibration
+                st.session_state['last_result'] = None
+                st.success('Match saved for this session. Go to Monte Carlo Studio, '
+                           'select the same baseline mode/grid, enable calibration and run again.')
+        with c_remove:
+            if st.button('Remove active match', use_container_width=True):
+                st.session_state['kappa_calibration'] = None
+                st.session_state['last_result'] = None
+                st.info('Saved match removed. Original physics is unchanged.')
+        if definition_matches:
+            st.caption('Currently saved match matches the benchmark settings shown above.')
+        else:
+            st.caption('The displayed match is a preview until you click **Save match for Monte Carlo**.')
+        st.download_button('⬇ Export benchmark comparison (CSV)',
+                           matched.to_csv(index=False).encode(), 'kappa_hyperion_comparison.csv',
+                           'text/csv', use_container_width=True)
+        with st.expander('Interpretation / required engineering QC'):
+            st.markdown("""- Ensure KAPPA rates are all from **one fractured zone** at the same test/forecast time.
+- Keep **Pwf, reservoir pressure, net pay, skin, Bo, viscosity and fracture design** aligned with KAPPA.
+- The strong flattening at 50–100 mD may involve VLP, choke/facility constraints, or finite fracture conductivity: these are **hypotheses** to verify, not facts established by the four points.
+- An empirical match may change incremental-oil and cumulative-oil forecasts. It does **not** calibrate decline, water cut, pressure support or fracture conductivity degradation.
+- Validate the calibrated forecast against **independent** KAPPA runs or measured performance before using for decisions.
+""")
+    except Exception as exc:
+        st.error(f'Benchmark comparison failed: {exc}')
 
 
 elif page == '2D Fracture Grid':

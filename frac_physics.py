@@ -209,6 +209,8 @@ class Result:
     ior_well_draws: np.ndarray | None = None
     eor_well_draws: np.ndarray | None = None
     well_active_mask: np.ndarray | None = None
+    calibration_method: str | None = None
+    calibration_definition: str | None = None
 
 
 def summarize_curves(result: Result) -> pd.DataFrame:
@@ -229,7 +231,7 @@ def summarize_curves(result: Result) -> pd.DataFrame:
 def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
            n_runs: int = 1000, years: int = 5, seed: int = 42,
            q0_mode: str = 'Measured rate anchor', grid_size: int = 21,
-           max_work: int = 300_000) -> Result:
+           max_work: int = 300_000, calibration: dict | None = None) -> Result:
     errs = validate_parameters(table)
     if errs:
         raise ValueError('; '.join(errs[:7]))
@@ -239,6 +241,12 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
         raise ValueError('At least 10 runs; forecast years 1-20')
     if n_runs * n_high > max_work:
         raise ValueError(f'Workload too large for Streamlit Cloud: runs × max wells must be <= {max_work:,}')
+    if calibration is not None:
+        from kappa_benchmark import calibration_factor, reference_signature, POST, INCREMENTAL
+        if calibration.get('definition') not in (POST, INCREMENTAL):
+            raise ValueError('Invalid benchmark definition.')
+        if calibration.get('signature') != reference_signature(table, q0_mode, grid_size):
+            raise ValueError('KAPPA calibration is stale or uses a different baseline model/grid. Refit the benchmark.')
     rng = np.random.default_rng(seed)
     count = np.rint(rng.triangular(n_low, n_mode, n_high, size=n_runs)).astype(int) if n_low != n_high else np.full(n_runs, n_low)
     count = np.clip(count, n_low, n_high)
@@ -284,6 +292,13 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
     xfrac_fraction = np.minimum(xfrac_fraction, .49)
     init_link = x['cf_mdft'] / np.maximum(k * dy, 1e-7) * x['frac_height_frac']
     frac_cut0 = x['wc0']
+    # Static permeability correction is only applied to a successful fracture,
+    # using single-zone KAPPA start-rate anchors. Never calibrate failed jobs.
+    if calibration is not None:
+        fit_factor = calibration_factor(k, calibration)
+        fit_factor = np.where(productive_frac, fit_factor, 1.0)
+    else:
+        fit_factor = None
     ior_per_well = np.zeros(n_runs)
     ior_well_draws = np.full(shape, np.nan)
     for m in range(M):
@@ -300,6 +315,14 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
         frac_gain = np.where(productive_frac, pre_den / post_den, 1.)
         q_base = q0 * np.maximum(base_pressure - pwf, 0.) / init_dp * b_oilcut * x['uptime']
         q_frac = q0 * np.maximum(frac_pressure - pwf, 0.) / init_dp * f_oilcut * x['uptime'] * frac_gain
+        if fit_factor is not None:
+            if calibration['definition'] == POST:
+                q_frac *= fit_factor
+            else:
+                # Scale only modeled frac uplift, leaving the baseline component.
+                comparable_base = q0 * np.maximum(frac_pressure-pwf,0.) / init_dp * f_oilcut * x['uptime']
+                q_frac = comparable_base + (q_frac-comparable_base) * fit_factor
+            q_frac = np.maximum(q_frac, 0.)
         month_start = m * DAYS_PER_MONTH
         month_end = (m + 1) * DAYS_PER_MONTH
         fraction_online = np.clip((month_end - np.maximum(month_start, x['downtime_days'])) / DAYS_PER_MONTH, 0., 1.)
@@ -342,4 +365,6 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
                   ior_per_well=ior_per_well, eor_per_well=eor_per_well,
                   inc_per_well=inc_per_well, diagnostic=diag, lookup=lookup,
                   ior_well_draws=ior_well_draws, eor_well_draws=np.where(mask, cf, np.nan),
-                  well_active_mask=mask)
+                  well_active_mask=mask,
+                  calibration_method=calibration['method'] if calibration else None,
+                  calibration_definition=calibration['definition'] if calibration else None)
