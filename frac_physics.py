@@ -189,6 +189,12 @@ class GridLookup:
         return np.where((lf <= 0) | (cr <= 0), 1., np.maximum(v, 1.))
 
 
+@lru_cache(maxsize=8)
+def cached_grid_lookup(grid_size: int) -> GridLookup:
+    """One read-only grid lookup per resolution; reuse across original/matched MC runs."""
+    return GridLookup(n=int(grid_size))
+
+
 @dataclass
 class Result:
     months: np.ndarray
@@ -279,7 +285,7 @@ def run_mc(table: pd.DataFrame, n_low: int, n_mode: int, n_high: int,
     storage = np.maximum(pv_rb * ct, 1e-6)
     base_pressure = pr0.copy()
     frac_pressure = pr0.copy()
-    lookup = GridLookup(n=grid_size)
+    lookup = cached_grid_lookup(grid_size)
     M = 12 * years
     pre_rate = np.zeros((n_runs, M))
     frac_rate = np.zeros((n_runs, M))

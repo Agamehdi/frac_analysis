@@ -1,4 +1,4 @@
-"""Frac Hyperion v2.2 – including optional KAPPA single-zone benchmarking."""
+"""Frac Hyperion v2.3 – one-click all-realization KAPPA Monte Carlo matching."""
 from __future__ import annotations
 
 import io
@@ -30,7 +30,7 @@ CUSTOM = """
 </style>
 """
 st.markdown(CUSTOM, unsafe_allow_html=True)
-st.markdown('<div class="hero"><h1>FRAC HYPERION <small style="font-size:0.42em">V2.2</small></h1>'
+st.markdown('<div class="hero"><h1>FRAC HYPERION <small style="font-size:0.42em">V2.3</small></h1>'
             '<p>Probabilistic fracture productivity • Monte Carlo forecast • 2D grid flow model</p></div>',
             unsafe_allow_html=True)
 
@@ -44,6 +44,16 @@ if 'kappa_calibration' not in st.session_state:
     st.session_state['kappa_calibration'] = None
 if 'kappa_definition_saved' not in st.session_state:
     st.session_state['kappa_definition_saved'] = INCREMENTAL
+if 'kappa_method_saved' not in st.session_state:
+    st.session_state['kappa_method_saved'] = LOCAL
+if 'mc_apply_kappa_widget' not in st.session_state:
+    st.session_state['mc_apply_kappa_widget'] = False
+if 'raw_result' not in st.session_state:
+    st.session_state['raw_result'] = None
+if 'mc_match_comparison' not in st.session_state:
+    st.session_state['mc_match_comparison'] = None
+if 'mc_match_parameters' not in st.session_state:
+    st.session_state['mc_match_parameters'] = None
 
 PAGES = ['Monte Carlo Studio', 'KAPPA Benchmark & Match', '2D Fracture Grid', '3D Fracture View', 'Guidelines & SPE References']
 st.sidebar.title('Navigation')
@@ -174,9 +184,9 @@ def chart_style(fig, title, x_title, y_title, height=410, right_margin=58):
         height=height, paper_bgcolor='#FFFFFF', plot_bgcolor='#FFFFFF',
         font=dict(family=FONT_FAMILY, size=11, color='#101820'),
         xaxis_title=f'<b>{x_title}</b>', yaxis_title=f'<b>{y_title}</b>',
-        margin=dict(l=68, r=right_margin, t=67, b=60),
+        margin=dict(l=68, r=right_margin, t=69, b=94),
         hovermode='closest',
-        legend=dict(orientation='h', x=0, y=1.08, xanchor='left', yanchor='bottom',
+        legend=dict(orientation='h', x=0, y=-0.19, xanchor='left', yanchor='top',
                     bgcolor='rgba(255,255,255,0.85)', font=dict(size=10)))
     fig.update_xaxes(showgrid=True, gridcolor='#E0E6EC', linecolor='#AAB5C2',
                      linewidth=1, showline=True, zeroline=False,
@@ -361,7 +371,82 @@ def display_table_editor(prefs: UnitPrefs):
     return errs
 
 
-def result_archive(res) -> bytes:
+def _calibrate_from_mc_inputs(table, mode_name, grid_size):
+    """Fit with the exact modal inputs used in the MC run; no prerequisite Save tab."""
+    bench = check_benchmark(st.session_state['kappa_points'])
+    raw = reference_rates(table, bench['Perm (mD)'].to_numpy(float), mode_name, grid_size)
+    definition = st.session_state.get('kappa_definition_saved', INCREMENTAL)
+    method = st.session_state.get('kappa_method_saved', LOCAL)
+    sig = reference_signature(table, mode_name, grid_size)
+    return fit_benchmark(bench, raw, definition, method, sig)
+
+
+def _apply_kappa_sampling_span(params, enable):
+    """Optional copy: never overwrite user-edited parameter table."""
+    p = params.copy(deep=True)
+    if enable:
+        bench = check_benchmark(st.session_state['kappa_points'])
+        lo = float(bench['Perm (mD)'].min())
+        hi = float(bench['Perm (mD)'].max())
+        ix = p.index[p['Key'] == 'k_md'][0]
+        mode_value = float(p.loc[ix, 'Most likely'])
+        p.loc[ix, 'Low'] = lo
+        p.loc[ix, 'High'] = hi
+        p.loc[ix, 'Most likely'] = float(np.clip(mode_value, lo, hi))
+        p.loc[ix, 'Distribution'] = 'Log-triangular'
+    return p
+
+
+def _enable_match_checkbox():
+    """Button callback runs before widgets are instantiated on the next rerun."""
+    st.session_state['mc_apply_kappa_widget'] = True
+    st.session_state['mc_result_view'] = 'KAPPA-matched cloud'
+
+
+def compare_cloud_plot(raw, matched, attr, title, ylabel, unit_factor=1.0,
+                       raw_cloud=True):
+    """Same seeds and sampled well properties, before/after comparison."""
+    t = np.asarray(matched.months, dtype=float) / 12
+    old = np.asarray(getattr(raw, attr)) * unit_factor
+    new = np.asarray(getattr(matched, attr)) * unit_factor
+    fig = go.Figure()
+    ids = np.linspace(0, len(old)-1, min(85,len(old)), dtype=int)
+    if raw_cloud:
+        for i in ids:
+            fig.add_trace(go.Scatter(x=t, y=old[i], mode='lines', showlegend=False,
+                                     line=dict(color='rgba(100,116,139,0.12)', width=1), hoverinfo='skip'))
+    for i in ids:
+        fig.add_trace(go.Scatter(x=t, y=new[i], mode='lines', showlegend=False,
+                                 line=dict(color='rgba(0,180,105,0.13)', width=1), hoverinfo='skip'))
+    for quant, label, color in [(10,'P90',P90_COLOR),(50,'P50',P50_COLOR),(90,'P10',P10_COLOR)]:
+        fig.add_trace(go.Scatter(x=t,y=np.percentile(old,quant,axis=0), mode='lines',
+                                 name=f'Original {label}', line=dict(color=color,width=1.8,dash='dot'),
+                                 hovertemplate=f'Original {label}: %{{y:,.2f}}<extra></extra>'))
+        fig.add_trace(go.Scatter(x=t,y=np.percentile(new,quant,axis=0), mode='lines',
+                                 name=f'Matched {label}', line=dict(color=color,width=3.4),
+                                 hovertemplate=f'Matched {label}: %{{y:,.2f}}<extra></extra>'))
+    chart_style(fig,title,'Time (years)',ylabel,height=490)
+    return fig
+
+
+def before_after_table(original, matched):
+    entries = [('Initial post-frac rate','frac_rate',0,'stb/d'),
+               ('Initial incremental rate','incremental_rate',0,'stb/d'),
+               ('End incremental rate','incremental_rate',-1,'stb/d'),
+               ('Forecast incremental oil','incremental_cum',-1,'stb')]
+    data=[]
+    for label, attr, t, units in entries:
+        orig = getattr(original,attr)[:,t]
+        mtch = getattr(matched,attr)[:,t]
+        for q,name in [(10,'P90'),(50,'P50'),(90,'P10')]:
+            v0,v1=float(np.percentile(orig,q)),float(np.percentile(mtch,q))
+            data.append({'Metric':label,'Percentile':name,'Unit':units,
+                         'Original':v0,'KAPPA-matched':v1,'Difference':v1-v0,
+                         'Change (%)': (100*(v1/v0-1)) if abs(v0)>1e-9 else np.nan})
+    return pd.DataFrame(data)
+
+
+def result_archive(res, original=None, comparison=None) -> bytes:
     curves = summarize_curves(res)
     monthly = {'Run': np.repeat(np.arange(1, len(res.well_count)+1), len(res.months)),
                'Month': np.tile(res.months, len(res.well_count))}
@@ -391,12 +476,24 @@ def result_archive(res) -> bytes:
                 'IOR first-month avg bopd': np.asarray(res.ior_well_draws)[mask],
                 'EOR forecast-horizon stb': np.asarray(res.eor_well_draws)[mask]})
             zz.writestr('individual_well_draws.csv', raw_wells.to_csv(index=False))
-        zz.writestr('input_ranges.csv', st.session_state['params'].to_csv(index=False))
+        zz.writestr('input_ranges.csv', st.session_state.get('mc_match_parameters', st.session_state['params']).to_csv(index=False))
         zz.writestr('calibration_used.txt',
                     ('Method: '+str(res.calibration_method)+'\nDefinition: '+str(res.calibration_definition))
                     if res.calibration_method else 'Calibration: OFF')
-        if res.calibration_method and st.session_state.get('kappa_calibration'):
+        if res.calibration_method:
             zz.writestr('kappa_benchmark_points.csv', st.session_state['kappa_points'].to_csv(index=False))
+        if original is not None:
+            zz.writestr('original_monthly_percentiles.csv', summarize_curves(original).to_csv(index=False))
+            zz.writestr('original_run_level_results.csv', original.diagnostic.to_csv(index=False))
+            zz.writestr('original_all_realizations_monthly.csv', pd.DataFrame({
+                'Run':np.repeat(np.arange(1,len(original.well_count)+1),len(original.months)),
+                'Month':np.tile(original.months,len(original.well_count)),
+                'Original rate bopd':original.frac_rate.ravel(),
+                'Original incremental rate bopd':original.incremental_rate.ravel(),
+                'Original incremental cumulative stb':original.incremental_cum.ravel()}).to_csv(index=False))
+            zz.writestr('before_after_percentiles.csv',before_after_table(original,res).to_csv(index=False))
+        if comparison is not None:
+            zz.writestr('kappa_model_anchor_match.csv',comparison.to_csv(index=False))
     return bio.getvalue()
 
 
@@ -427,38 +524,96 @@ if page == 'Monte Carlo Studio':
     errors = display_table_editor(PREFS)
     if not (nlo <= nmid <= nhi):
         st.error('Well count inputs must satisfy Low ≤ Most likely ≤ High.')
-    active = st.session_state.get('kappa_calibration')
-    sig = reference_signature(st.session_state['params'], initial_rate, grid_size)
-    match_available = bool(active and active['signature'] == sig)
-    if active and not match_available:
-        st.warning('KAPPA match was prepared with different model inputs or baseline mode. '
-                   'Rebuild the match on the KAPPA page before using it here.')
-    if active and match_available:
-        st.caption(f"KAPPA match available: {active['method']} | {active['definition']} | "
-                   f"k = {active['perms_md'][0]:g}–{active['perms_md'][-1]:g} mD; "
-                   'outside this range the correction is not applied.')
-    use_match = st.checkbox('Apply KAPPA-matched calibration to Monte Carlo forecast',
-                            value=False, disabled=not match_available,
-                            help='Applies a permeability-specific rate correction only to technically successful fractures. '
-                                 'The base-case forecast stays unchanged. The match is empirical, not new frac physics.')
-    if use_match and initial_rate == 'Measured rate anchor':
-        st.warning('Measured rate anchor fixes baseline q0 across permeabilities. '
-                   'For KAPPA variable-permeability comparison, mechanistic Darcy PI is usually more meaningful.')
-    run_now = st.button('▶ Run Monte Carlo', type='primary', use_container_width=True,
-                        disabled=bool(errors) or not (nlo <= nmid <= nhi))
-    if run_now:
-        with st.spinner('Running Monte Carlo forecast...'):
+    # The checkbox remains enabled: unlike v2.2 there is no prerequisite saved
+    # signature or manually synchronized baseline mode / grid on another page.
+    st.markdown('#### KAPPA calibration of the entire Monte Carlo ensemble')
+    st.checkbox('Apply KAPPA-matched calibration to Monte Carlo forecast',
+                key='mc_apply_kappa_widget',
+                help='Always available. Calibration is fitted automatically from the current MC inputs, '
+                     'then used for EACH successful fractured well in EVERY realization and forecast month.')
+    coverage = check_benchmark(st.session_state['kappa_points'])
+    cspan0 = float(coverage['Perm (mD)'].min())
+    cspan1 = float(coverage['Perm (mD)'].max())
+    sample_full_k = st.checkbox(
+        f'Include full KAPPA permeability span ({cspan0:g}–{cspan1:g} mD) in both MC scenarios',
+        value=False, key='mc_expand_k',
+        help='Optional: makes a temporary copy of the parameter ranges, changes only matrix '
+             'permeability Low/High to benchmark extremes and uses Log-triangular draws. '
+             'Original and Matched use exactly the same sampled reservoir cases. '
+             'Does not edit your parameter table.')
+    existing_k = st.session_state['params'].set_index('Key').loc['k_md']
+    if existing_k['High'] < cspan1 or existing_k['Low'] > cspan0:
+        st.caption(f"Current Monte Carlo k range: {existing_k['Low']:g}–{existing_k['High']:g} mD. "
+                   f"KAPPA benchmarks: {cspan0:g}–{cspan1:g} mD. "
+                   'The 50 and 100 mD anchors will not appear in the cloud unless you expand its k range.')
+    if initial_rate == 'Measured rate anchor' and st.session_state['mc_apply_kappa_widget']:
+        st.warning('Measured rate anchor makes the pre-frac oil rate independent of k. For a true k-dependent KAPPA PI comparison, consider Mechanistic radial Darcy PI. The existing baseline mode is preserved, not overridden.')
+    st.caption('One click fits the KAPPA anchors to the current modal physics, runs paired forecasts '
+               'with the same random seed and rebuilds all oil-rate clouds, P90/P50/P10 and cumulative oil. '
+               'Only successful fractured wells are corrected. The base case is left unchanged.')
+    actions = st.columns([1,1])
+    with actions[0]:
+        run_now = st.button('▶ Run Monte Carlo (selected calibration mode)',
+                            use_container_width=True, disabled=bool(errors) or not(nlo<=nmid<=nhi))
+    with actions[1]:
+        direct_match = st.button('⚡ Match ENTIRE Monte Carlo Cloud to KAPPA',
+                                 on_click=_enable_match_checkbox,
+                                 type='primary', use_container_width=True,
+                                 disabled=bool(errors) or not(nlo<=nmid<=nhi))
+    if run_now or direct_match:
+        use_match = direct_match or st.session_state['mc_apply_kappa_widget']
+        with st.spinner('Computing full matched Monte Carlo ensemble...'
+                        if use_match else 'Running original Monte Carlo...'):
             try:
-                res = run_mc(st.session_state['params'], nlo, nmid, nhi, n_runs=simulations, years=years,
-                             seed=seed, q0_mode=initial_rate, grid_size=grid_size,
-                             calibration=active if use_match and match_available else None)
-                st.session_state['last_result'] = res
+                working = _apply_kappa_sampling_span(st.session_state['params'], sample_full_k)
+                matching = None
+                comp = None
+                if use_match:
+                    matching, comp = _calibrate_from_mc_inputs(working, initial_rate, grid_size)
+                original = run_mc(working,nlo,nmid,nhi,n_runs=simulations,years=years,
+                                  seed=seed,q0_mode=initial_rate,grid_size=grid_size)
+                if use_match:
+                    matched = run_mc(working,nlo,nmid,nhi,n_runs=simulations,years=years,
+                                     seed=seed,q0_mode=initial_rate,grid_size=grid_size,
+                                     calibration=matching)
+                    st.session_state['last_result'] = matched
+                    st.session_state['raw_result'] = original
+                    st.session_state['kappa_calibration'] = matching
+                    st.session_state['mc_match_comparison'] = comp
+                    st.session_state['mc_benchmark_snapshot'] = check_benchmark(st.session_state['kappa_points']).copy()
+                    st.session_state['mc_result_view'] = 'KAPPA-matched cloud'
+                else:
+                    st.session_state['last_result'] = original
+                    st.session_state['raw_result'] = None
+                    st.session_state['mc_match_comparison'] = None
+                st.session_state['mc_match_parameters'] = working.copy()
             except Exception as exc:
-                st.error(f'Run failed: {exc}')
-    res = st.session_state['last_result']
-    if res is not None:
-        st.caption('Forecast calibration: **' + (str(res.calibration_method) + ' / ' +
-                   str(res.calibration_definition) if res.calibration_method else 'OFF (original physics)') + '**')
+                st.error(f'Monte Carlo failed: {exc}')
+    result_matched = st.session_state['last_result']
+    original_result = st.session_state.get('raw_result')
+    paired = bool(result_matched is not None and original_result is not None
+                  and result_matched.calibration_method)
+    if result_matched is not None:
+        if paired:
+            snap = st.session_state.get('mc_benchmark_snapshot')
+            if snap is not None and not snap.equals(coverage):
+                st.warning('Benchmark inputs were edited since this cloud was calculated. Rerun matching to update the results.')
+            st.success('Whole-ensemble KAPPA calibration complete: each successful fractured well in every '
+                       'Monte Carlo realization was recalculated, including depletion and cumulative oil. '
+                       'Original and matched scenarios used identical random draws.')
+            view = st.radio('Show results in main charts',
+                            ['KAPPA-matched cloud','Original cloud'], horizontal=True,
+                            key='mc_result_view')
+            res = result_matched if view == 'KAPPA-matched cloud' else original_result
+            active_fit = st.session_state.get('kappa_calibration') or {}
+            limits = active_fit.get('perms_md', [cspan0,cspan1])
+            st.caption(f"Benchmark target: {result_matched.calibration_definition} | "
+                       f"Matching: {result_matched.calibration_method}; "
+                       f"applied across {limits[0]:g}–{limits[-1]:g} mD only. "
+                       'No correction outside this span.')
+        else:
+            res = result_matched
+            st.caption('Forecast calibration: OFF (original physics)')
         rate_factor, rate_label = rate_factor_and_label(PREFS.rate_scale)
         cum_factor, cum_label = cum_factor_and_label(PREFS.cum_scale)
         st.divider()
@@ -474,6 +629,41 @@ if page == 'Monte Carlo Studio':
         with m4:
             st.metric(f'P50 Initial Frac Rate ({rate_label})', f'{np.percentile(final_rate, 50):,.2f}')
 
+        if paired:
+            st.subheader('KAPPA | Entire Cloud — Before vs After')
+            st.caption('Solid percentile curves = matched, dotted = original. Green = recalculated '
+                       'individual realizations; grey = original realizations. P90/P50/P10 use all draws, '
+                       'not only plotted samples.')
+            draw_original = st.checkbox('Overlay original Monte Carlo realizations', value=True,
+                                        key='mc_overlay_original')
+            c_left, c_right = st.columns(2, gap='medium')
+            with c_left:
+                st.plotly_chart(compare_cloud_plot(original_result,result_matched,'frac_rate',
+                                                   'Oil Rate | Cloud Before vs After',
+                                                   f'Oil Rate ({rate_label})',rate_factor,
+                                                   draw_original),use_container_width=True)
+            with c_right:
+                st.plotly_chart(compare_cloud_plot(original_result,result_matched,'incremental_cum',
+                                                   'Incremental Cumulative | Before vs After',
+                                                   f'Incremental ({cum_label})',cum_factor,
+                                                   draw_original),use_container_width=True)
+            st.plotly_chart(compare_cloud_plot(original_result,result_matched,'incremental_rate',
+                                               'Incremental Oil Rate | Before vs After',
+                                               f'Incremental Rate ({rate_label})',rate_factor,
+                                               draw_original),use_container_width=True)
+            st.dataframe(before_after_table(original_result,result_matched).style.format({
+                'Original':'{:,.1f}','KAPPA-matched':'{:,.1f}',
+                'Difference':'{:+,.1f}', 'Change (%)':'{:+,.1f}%'},na_rep='—'),
+                use_container_width=True,hide_index=True)
+            st.caption('KAPPA anchors specify only start-rate vs permeability. These charts retain the '
+                       'existing model assumptions for decline, water-cut, pressure support, fracture '
+                       'conductivity loss, downtime and failure. A time-dependent KAPPA history is needed '
+                       'to calibrate the *shape* of decline.')
+            with st.expander('KAPPA anchor matching details'):
+                comp=st.session_state.get('mc_match_comparison')
+                if comp is not None:
+                    st.dataframe(comp,use_container_width=True,hide_index=True)
+            st.divider()
         st.subheader('Probabilistic Production Forecasts')
         r1left, r1right = st.columns(2, gap='medium')
         with r1left:
@@ -518,8 +708,12 @@ if page == 'Monte Carlo Studio':
                 eor * cum_factor, 'EOR per Well — Forecast Horizon',
                 f'EOR per Well ({cum_label})', counts, well_ids, run_ids),
                 use_container_width=True)
-        st.download_button('⬇ Download result package (.zip)', result_archive(res),
-                           'frac_hyperion_v2_2_results.zip', 'application/zip', use_container_width=True)
+        st.download_button('⬇ Download result package (.zip)',
+                           result_archive(result_matched if paired else res,
+                                          original_result if paired else None,
+                                          st.session_state.get('mc_match_comparison') if paired else None),
+                           'frac_hyperion_v2_3_cloud_match_results.zip',
+                           'application/zip', use_container_width=True)
 
 
 elif page == 'KAPPA Benchmark & Match':
@@ -574,8 +768,10 @@ elif page == 'KAPPA Benchmark & Match':
                                        'the same fixed pre-frac oil rate at every permeability.')
         grid_res = st.select_slider('Benchmark grid resolution', options=[15,19,21,25,29], value=21)
         method = st.selectbox('Automatic match method', [LOCAL, GLOBAL],
+                              index=0 if st.session_state['kappa_method_saved'] == LOCAL else 1,
                               help='PCHIP reproduces input targets in the 1-zone anchor scenario. Global multiplier '
                                    'can only reduce aggregate error, not necessarily fit all four points.')
+        st.session_state['kappa_method_saved'] = method
         threshold = st.slider('Acceptable raw error (MAPE, %)', 1, 50, 15)
         st.caption('Inputs are taken from the **Most likely** column on Monte Carlo Studio. '
                    'The same fracture geometry, fluid properties and pressure differential are used at all k values.')
@@ -660,12 +856,14 @@ elif page == 'KAPPA Benchmark & Match':
             if st.button('✓ Save match for Monte Carlo', type='primary', use_container_width=True):
                 st.session_state['kappa_calibration'] = calibration
                 st.session_state['last_result'] = None
+                st.session_state['raw_result'] = None
                 st.success('Match saved for this session. Go to Monte Carlo Studio, '
                            'select the same baseline mode/grid, enable calibration and run again.')
         with c_remove:
             if st.button('Remove active match', use_container_width=True):
                 st.session_state['kappa_calibration'] = None
                 st.session_state['last_result'] = None
+                st.session_state['raw_result'] = None
                 st.info('Saved match removed. Original physics is unchanged.')
         if definition_matches:
             st.caption('Currently saved match matches the benchmark settings shown above.')

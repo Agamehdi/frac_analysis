@@ -1,44 +1,77 @@
-# FRAC HYPERION V2.2 | KAPPA Benchmark Matching
+# FRAC HYPERION V2.3 — Entire Monte Carlo Cloud → KAPPA Benchmark
 
-Updated from the user's **October 17, 2026 Frac Hyperion V2.1** Streamlit app, with its existing Monte Carlo / 2D / 3D / SPE pages preserved.
+Updated from FRAC HYPERION V2.2. Previous Monte Carlo, 2D Grid, 3D Fracture, SPE References and editable uncertainty inputs are preserved.
 
-## Deploy to GitHub + Streamlit Cloud
+## Installation / deployment
 
-Upload `streamlit_app.py`, `frac_physics.py`, `kappa_benchmark.py`, `requirements.txt` to the repository root. Streamlit Cloud entry point: **`streamlit_app.py`**. `test_kappa_benchmark.py` and this README are optional for deployment.
+Copy **all** these files to the root of the existing GitHub repository (replace old versions of files with identical names):
 
-For local execution: `pip install -r requirements.txt` and `streamlit run streamlit_app.py`.
+- `streamlit_app.py` — Streamlit UI, one-click matching and comparison plots.
+- `frac_physics.py` — grid-based productivity and Monte Carlo, including the per-well calibration.
+- `kappa_benchmark.py` — anchor validation, fitting and permeability interpolation.
+- `requirements.txt` — dependency versions for Streamlit Cloud.
 
-## New tab: KAPPA Benchmark & Match
+Cloud entry point is `streamlit_app.py`. Locally:
 
-The supplied KAPPA **single-zone benchmark** is loaded automatically and can be edited or replaced with a two-column CSV:
+```bash
+python -m pip install -r requirements.txt
+python -m streamlit run streamlit_app.py
+```
 
-| Perm (mD) | KAPPA Oil Rate (stb/d) |
+`test_kappa_benchmark.py` and `test_cloud_match.py` are optional tests (requires `pytest`).
+
+## The reported bug: disabled checkbox
+
+In V2.2, **Apply KAPPA-matched calibration** was disabled until a match had been saved on the separate KAPPA tab **and** every modal input, baseline rate mode and grid resolution agreed with the saved match signature. This was confusing when Monte Carlo used the default `Measured rate anchor`, whereas KAPPA Benchmark used the default `Mechanistic radial Darcy PI`.
+
+**V2.3 fix:** The checkbox is never disabled because of a missing/stale saved match. On request, the program fits the editable KAPPA points **using the actual Monte Carlo inputs**. No pre-saving on the KAPPA tab, matching mode manually or grid synchronization is required.
+
+## One-click usage
+
+1. Open **KAPPA Benchmark & Match** if you want to edit/import reference data. Default points are shown below. Default interpretation is *incremental rate*, not total post-frac rate.
+2. Open **Monte Carlo Studio** and edit uncertainty parameters as before. Use **Mechanistic radial Darcy PI** for a permeability-dependent pre-frac PI; **Measured rate anchor** is still available and unchanged.
+3. Optionally tick **Include full KAPPA permeability span** to make a *temporary* 1–100 mD `Log-triangular` permeability sampling distribution for both scenarios, leaving the user's uncertainty input table untouched. If unticked, the existing k distribution is unchanged (default 1–20 mD: the 50 and 100 mD anchors are outside its population).
+4. Click **⚡ Match ENTIRE Monte Carlo Cloud to KAPPA**. This button automatically checks the calibration checkbox, fits the latest points and runs **two** models with identical seeds/input draws: original and KAPPA-matched. The standard **Run Monte Carlo** button also respects the manual checkbox.
+5. Inspect the **KAPPA | Entire Cloud — Before vs After** charts, percentile comparison table, matched cloud, individual well scatter, and downloadable results.
+6. Use **Show results in main charts → Original cloud** to switch back without deleting the matched results, or untick **Apply...** and click **Run Monte Carlo** to run original only.
+
+### Default KAPPA single-zone inputs
+
+| Permeability (mD) | Incremental oil (stb/d) |
 | ---: | ---: |
 | 1 | 70 |
 | 10 | 380 |
 | 50 | 700 |
 | 100 | 720 |
 
-**Default interpretation:** KAPPA numbers are **incremental oil rates (post-frac minus pre-frac)**, as stated by the user. Switch to **Post-frac oil rate** if these numbers are actually *total* post-frac rates.
+The user can edit or upload a CSV in the **KAPPA Benchmark & Match** page. `Permeability-dependent (PCHIP)` fits these four *modal-condition* targets exactly, by construction. `Single global multiplier` is available but cannot generally fit every point.
 
-The comparison holds modal inputs constant except permeability and computes a **stabilized 1-zone flow rate** with the same radial-PI + grid-derived frac geometry formula as the Monte Carlo engine. It intentionally excludes uptime/downtime, depletion, frac technical-failure probability and well count. The default baseline mode in the new tab is **Mechanistic radial Darcy PI**, to make permeability sensitivities meaningful.
+## What "entire cloud" means technically
 
-Display: KAPPA points versus the raw Hyperion curve, a matched curve, table of relative errors, MAPE, RMSE, maximum error, and the applied correction factor.
+- Each Monte Carlo realization samples a different number of wells and their rock, fluid, reservoir and fracture inputs.
+- Every **successful, physically productive fractured well** gets its permeability-specific calibrated correction during every forecast time step. Technical failures remain uncorrected.
+- **Incremental-rate benchmarks** multiply the modeled *uplift* over the comparable unfractured rate, rather than multiplying the entire rate; **post-frac rate benchmarks** multiply the post-frac rate.
+- With the corrected rate, the simulator **recalculates pressure depletion month by month**, total and incremental oil rates, cumulative oil, and all P90/P50/P10 statistics. This is **not** a cosmetic scaling of Plotly curves.
+- The original and matched scenarios use exactly the same sampled inputs and random seed, so before/after comparisons are paired. Every realization contributes to percentile calculations, though only a subset of curve traces is plotted to keep the dashboard responsive.
+- Correction is **disabled outside the reference permeability interval**, rather than extrapolating without evidence.
+- The primary before/after overlay displays matched trajectories and original trajectories, plus all three percentile lines for both cases.
+- Export includes matched rates, run-level outcomes, individual well results, the original forecast and before/after table, calibration details and benchmark points.
 
-### Two matching options
+## Key limitations / QC
 
-- **Permeability-dependent PCHIP:** positive factor based on `KAPPA rate / raw model rate` at each anchor. Shape-preserving interpolation in `log(k)` and `log(factor)`, with **no extrapolation**. It necessarily matches the four points (in-sample); this does **not** prove physical accuracy.
-- **Single global multiplier:** nonnegative least-squares factor through the origin, which reduces squared error but does not necessarily match every anchor.
+- The four KAPPA values are **simulator benchmark points for one zone**. They are not measured field history and have no decline/time-profile data.
+- Matching **initial oil rate versus permeability** cannot calibrate the **time-dependent decline profile**, pressure support, fluid mobility / relative permeability, fracture propagation, conductivity retention, water-cut evolution, cleanup, VLP constraints or unsuccessful frac-job performance. Those are driven by the existing assumptions.
+- Thus *all* forecast paths change due to a rate correction and recalculated depletion, but **it does not mean every point of every forecast path has been independently matched to KAPPA**. To match forecast shapes, supply KAPPA oil-rate-versus-time profiles at relevant permeabilities.
+- Preserve consistency of net pay, reservoir pressure, Pwf, PVT, drawdown, pre/post skin, fracture geometry and rate definition. Use **Mechanistic radial Darcy PI** to benchmark relative permeability sensitivity when a fixed pre-frac measured rate across all k values would be inappropriate.
+- The 700→720 stb/d flattening over 50→100 mD suggests a rate ceiling or efficiency decline, but four data points cannot identify its physical cause. Check KAPPA sensitivity and other constraints.
+- This remains a single-phase fracture-productivity *screening* model, not a hydraulic fracture-propagation or multiphase transient simulator, nor a reserves certification tool.
 
-Press **Save match for Monte Carlo** then go to **Monte Carlo Studio**, use the **same baseline model and grid resolution** as the KAPPA tab, select **Apply KAPPA-matched calibration**, and rerun. The change is OFF by default, affects *successful fracture* rates only, and leaves baseline production unchanged. The resulting forecast / cumulative increments can change; original uncalibrated solver remains available. A saved match cannot be used after changing the modal physics reference inputs until it is rebuilt. Calibration factors apply **only inside the submitted permeability interval**, otherwise the factor is 1.0.
+## Validation
 
-### Engineering QC warnings
+From this folder with `pytest` installed:
 
-- KAPPA simulations are an engineering reference, not independent field observations.
-- Four points alone do not identify the physical reason for saturation at 50–100 mD: vertical lift, rate caps, skin, limited fracture conductivity, etc. should be tested separately.
-- Ensure **one fractured zone**, **net pay**, **reservoir pressure**, **Pwf**, **Bo**, **viscosity**, **pre- / post-frac skin**, **fracture length / conductivity** are aligned between both models.
-- This empirical start-rate correction is not a rigorous history match of fracture geometry, multiphase fluid flow, WC, wellhead/choke constraints, pressure support, frac degradation or decline. **Forecast and reserves still require independent verification.**
+```bash
+python -m pytest -q test_kappa_benchmark.py test_cloud_match.py
+```
 
-## Python numerical tests
-
-Run `python -m pytest -q test_kappa_benchmark.py` (requires pytest). The tests check the 4 anchor points, both rate definitions, MC propagation, no extrapolation and stale-calibration protection.
+Nine tests cover anchor matching, interpretation as incremental vs post-frac, global/local matching, stale signature, no extrapolation, failure behavior, and entire Monte Carlo array / forecast recalculation. The code is syntax-checked. Full Streamlit front-end runtime testing was unavailable in the authoring environment because Streamlit could not be installed offline.

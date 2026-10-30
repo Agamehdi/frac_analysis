@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import PchipInterpolator
 
-from frac_physics import GridLookup
+from frac_physics import GridLookup, cached_grid_lookup
 
 DEFAULT_BENCHMARK = pd.DataFrame({
     'Perm (mD)': [1.0, 10.0, 50.0, 100.0],
@@ -84,7 +84,7 @@ def reference_rates(table: pd.DataFrame, perms: Any, baseline_mode: str,
         baseline = np.full_like(k, x['q0_bopd'])
     else:
         raise ValueError('Unknown baseline mode.')
-    lookup = lookup if lookup is not None else GridLookup(n=n)
+    lookup = lookup if lookup is not None else cached_grid_lookup(n)
     frac_length = min(x['xf_ft']/side, .49)
     conductance = (x['cf_mdft']/(k * dy)) * x['frac_height_frac']
     geo_gain = lookup.gain(np.full_like(k, frac_length), conductance)
